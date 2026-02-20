@@ -64,6 +64,62 @@ Resuma em até 200 palavras as descobertas mais relevantes para criação de con
         except Exception as e:
             print(f"Erro na geração de conteúdo: {e}")
             return None
+
+    def _prompt_base_por_tipo(self, conta, tipo, tendencias, stories_quantidade=6):
+        if tipo == "post":
+            return get_post_prompt(conta, tendencias)
+        if tipo == "reel":
+            return get_reel_prompt(conta, tendencias)
+        if tipo == "carrossel":
+            return get_carrossel_prompt(conta, tendencias)
+        if tipo == "stories":
+            return get_stories_prompt(conta, quantidade=stories_quantidade)
+        raise ValueError(f"Tipo de conteudo invalido: {tipo}")
+
+    def gerar_conteudo_especifico(self, conta_id, tipo, prompt_usuario, stories_quantidade=6):
+        """Gera um conteúdo pontual guiado por tema informado pela usuária."""
+
+        conta = CONTAS[conta_id]
+        tipo = tipo.strip().lower()
+
+        keywords = conta["keywords_pesquisa"]
+        if tipo == "reel":
+            keywords = keywords + ["reels tendencias"]
+        tendencias = self.pesquisar_tendencias(keywords)
+
+        prompt_base = self._prompt_base_por_tipo(
+            conta=conta,
+            tipo=tipo,
+            tendencias=tendencias,
+            stories_quantidade=stories_quantidade,
+        )
+
+        prompt_final = f"""{prompt_base}
+
+AJUSTE ESTRATEGICO OBRIGATORIO:
+- Centro tematico da publicacao: {prompt_usuario}
+- Todo o conteudo deve manter o posicionamento da marca, mas girar em torno do tema acima.
+- Nao ignorar o tema central em nenhuma secao do output.
+- Mantenha o formato de resposta exatamente como solicitado no prompt base.
+"""
+
+        max_tokens_por_tipo = {
+            "post": 2200,
+            "reel": 2200,
+            "carrossel": 3200,
+            "stories": 2800,
+        }
+        conteudo = self.gerar_conteudo(prompt_final, max_tokens=max_tokens_por_tipo[tipo])
+
+        return {
+            "conta_id": conta_id,
+            "conta_nome": conta["nome"],
+            "tipo": tipo,
+            "prompt_usuario": prompt_usuario,
+            "tendencias": tendencias,
+            "stories_quantidade": stories_quantidade if tipo == "stories" else None,
+            "conteudo": conteudo or "Falha ao gerar conteudo especifico.",
+        }
     
     def gerar_posts(self, conta_id, quantidade=1):
         """Gera posts informativos"""

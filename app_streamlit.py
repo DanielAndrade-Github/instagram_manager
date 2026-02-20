@@ -5,139 +5,339 @@ App Streamlit para gerar plano semanal e exportar PDF.
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, datetime
+import re
+import unicodedata
 
 import streamlit as st
 from dotenv import load_dotenv
 
 from config import CONTAS, CONFIGURACOES
 from generator import InstagramContentGenerator
-from pdf_exporter import exportar_plano_pdf
+from pdf_exporter import exportar_conteudo_especifico_pdf, exportar_plano_pdf
 from weekly_planner import gerar_plano_semanal, salvar_plano_em_markdown
+
+
+def obter_api_key() -> str:
+    key = os.getenv("GROQ_API_KEY", "")
+    if key:
+        return key
+    try:
+        return st.secrets.get("GROQ_API_KEY", "")
+    except Exception:
+        return ""
+
+
+def aplicar_tema_pastel():
+    st.markdown(
+        """
+        <style>
+            :root {
+                --bg: #f6f0e6;
+                --card: #fffaf2;
+                --border: #d8c7ad;
+                --text: #3f3427;
+                --accent: #b89974;
+                --accent-hover: #a5845f;
+            }
+
+            .stApp {
+                background: linear-gradient(180deg, #f6f0e6 0%, #f2e8d8 100%);
+                color: var(--text);
+            }
+
+            .block-container {
+                max-width: 920px;
+                padding-top: 1.5rem;
+                padding-bottom: 2rem;
+            }
+
+            h1, h2, h3, h4, p, label, div {
+                color: var(--text);
+            }
+
+            [data-testid="stForm"] {
+                background: var(--card);
+                border: 1px solid var(--border);
+                border-radius: 14px;
+                padding: 1rem 1rem 0.5rem 1rem;
+            }
+
+            [data-testid="stDownloadButton"] button,
+            [data-testid="stFormSubmitButton"] button {
+                background-color: var(--accent) !important;
+                color: #fff !important;
+                border: 1px solid var(--accent) !important;
+                border-radius: 10px !important;
+            }
+
+            [data-testid="stDownloadButton"] button:hover,
+            [data-testid="stFormSubmitButton"] button:hover {
+                background-color: var(--accent-hover) !important;
+                border-color: var(--accent-hover) !important;
+            }
+
+            [data-baseweb="select"] > div,
+            [data-baseweb="input"] > div {
+                background: #fffefb !important;
+                border-color: var(--border) !important;
+            }
+
+            [data-testid="stAlert"] {
+                border-radius: 10px;
+                border: 1px solid var(--border);
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _resolver_contas(escolha_cliente: str, nome_para_id: dict, contas_disponiveis: list[str]) -> list[str]:
+    if escolha_cliente == "Todos":
+        return contas_disponiveis
+    return [nome_para_id[escolha_cliente]]
+
+
+def _slugify(value: str) -> str:
+    value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    value = re.sub(r"[^a-zA-Z0-9]+", "_", value.lower()).strip("_")
+    return value or "cliente"
+
+
+def _salvar_markdown_conteudo_especifico(resultado: dict, pasta_output: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pasta_base = os.path.join(pasta_output, f"conteudo_especifico_{timestamp}")
+    os.makedirs(pasta_base, exist_ok=True)
+
+    for item in resultado["itens"]:
+        nome_arquivo = _slugify(item["conta_nome"])
+        caminho = os.path.join(pasta_base, f"{nome_arquivo}_{resultado['tipo']}.md")
+        with open(caminho, "w", encoding="utf-8") as f:
+            f.write("# Conteudo Especifico\n\n")
+            f.write(f"Cliente: {item['conta_nome']}\n")
+            f.write(f"Tipo: {resultado['tipo']}\n")
+            f.write(f"Tema central: {resultado['prompt_usuario']}\n")
+            if item.get("stories_quantidade"):
+                f.write(f"Stories solicitados: {item['stories_quantidade']}\n")
+            f.write("\n---\n\n")
+            f.write(item["conteudo"])
+
+    return pasta_base
 
 
 def main():
     load_dotenv()
-    st.set_page_config(page_title="Planejador Instagram", layout="wide")
-    st.title("Planejador Semanal de Conteudo")
-    st.caption("Gera de 1 a 7 dias de conteudo por cliente e exporta um PDF unico.")
+    st.set_page_config(page_title="Planejador Instagram", layout="centered")
+    aplicar_tema_pastel()
+    st.title("Planejador e Gerador de Conteudo")
+    st.caption("Gere plano semanal ou publicacao especifica com PDF dedicado.")
 
-    with st.sidebar:
-        st.header("Configuracao")
-        api_key = st.text_input(
-            "GROQ_API_KEY",
-            value=os.getenv("GROQ_API_KEY", ""),
-            type="password",
-            help="Chave da Groq (free tier disponivel).",
-        )
-        contas_disponiveis = list(CONTAS.keys())
-        opcoes_cliente = []
-        if len(contas_disponiveis) >= 1:
-            opcoes_cliente.append("1")
-        if len(contas_disponiveis) >= 2:
-            opcoes_cliente.append("2")
-        if len(contas_disponiveis) >= 1:
-            opcoes_cliente.append("todos")
+    api_key = obter_api_key()
+    contas_disponiveis = list(CONTAS.keys())
+    nome_para_id = {CONTAS[cid]["nome"]: cid for cid in contas_disponiveis}
+    opcoes_cliente = list(nome_para_id.keys()) + ["Todos"]
+    aba_semanal, aba_especifico = st.tabs(["Plano Semanal", "Conteudo Especifico"])
 
-        escolha_cliente = st.selectbox(
-            "Qual cliente quer? (1, 2 ou todos)",
-            options=opcoes_cliente,
-            index=opcoes_cliente.index("todos") if "todos" in opcoes_cliente else 0,
-            help=(
-                f"1 = {CONTAS[contas_disponiveis[0]]['nome']}"
-                + (
-                    f" | 2 = {CONTAS[contas_disponiveis[1]]['nome']}"
-                    if len(contas_disponiveis) >= 2
-                    else ""
-                )
-            ),
-        )
-        if escolha_cliente == "1":
-            contas_selecionadas = [contas_disponiveis[0]]
-        elif escolha_cliente == "2":
-            contas_selecionadas = [contas_disponiveis[1]]
-        else:
-            contas_selecionadas = contas_disponiveis
-
-        data_inicio = st.date_input(
-            "Data de inicio (incluida no plano)",
-            value=date.today(),
-            format="YYYY-MM-DD",
-            help="Se executar no sabado, mantenha a data de hoje para incluir o sabado.",
-        )
-        dias = st.number_input("Para quantos dias? (1 a 7)", min_value=1, max_value=7, value=7, step=1)
-        gerar = st.button("Gerar Plano + PDF", type="primary", use_container_width=True)
-
-    st.write("### Volumes semanais configurados")
-    for conta_id in contas_selecionadas:
-        volume = CONTAS[conta_id]["volume"]
-        st.write(
-            f"- {CONTAS[conta_id]['nome']}: "
-            f"{volume['posts']} posts, {volume['reels']} reels, "
-            f"{volume['carrosseis']} carrosseis, {volume['stories']} stories"
-        )
-
-    if not gerar:
-        return
-
-    if not api_key:
-        st.error("Informe a GROQ_API_KEY no campo lateral ou no arquivo .env.")
-        return
-    if not contas_selecionadas:
-        st.error("Selecione pelo menos um cliente.")
-        return
-
-    generator = InstagramContentGenerator(api_key)
-    passos_totais = len(contas_selecionadas) * 4
-    progresso_estado = {"done": 0}
-    barra = st.progress(0.0, text="Iniciando...")
-    status_box = st.empty()
-
-    def status_cb(msg: str):
-        progresso_estado["done"] += 1
-        fracao = min(progresso_estado["done"] / max(passos_totais, 1), 1.0)
-        barra.progress(fracao, text=msg)
-        status_box.info(msg)
-
-    with st.spinner("Gerando conteudo, aguarde..."):
-        plano = gerar_plano_semanal(
-            generator=generator,
-            conta_ids=contas_selecionadas,
-            data_inicio=data_inicio,
-            dias=dias,
-            status_cb=status_cb,
-        )
-        pasta_semana = salvar_plano_em_markdown(plano, CONFIGURACOES["pasta_output"])
-        caminho_pdf = os.path.join(pasta_semana, "plano_semanal.pdf")
-        try:
-            exportar_plano_pdf(plano, caminho_pdf)
-        except ModuleNotFoundError as exc:
-            st.error(str(exc))
-            st.info("Instale dependencias com: pip install -r requirements.txt")
-            return
-
-    barra.progress(1.0, text="Concluido")
-    status_box.success(f"Arquivos gerados em: {pasta_semana}")
-    st.success("Plano semanal gerado com sucesso.")
-
-    st.write("### Resumo")
-    for conta in plano["contas"]:
-        st.write(f"**{conta['nome']}**")
-        for dia in conta["dias"]:
-            st.write(
-                f"- {dia['dia_semana']} ({dia['data']}): "
-                f"posts={len(dia['posts'])}, reels={len(dia['reels'])}, "
-                f"carrosseis={len(dia['carrosseis'])}, stories={dia['stories_quantidade']}"
+    with aba_semanal:
+        with st.form("form_planejamento", clear_on_submit=False):
+            escolha_cliente = st.selectbox(
+                "Cliente",
+                options=opcoes_cliente,
+                index=len(opcoes_cliente) - 1,
+                key="cliente_semanal",
+            )
+            data_inicio = st.date_input(
+                "Data de inicio",
+                value=date.today(),
+                format="YYYY-MM-DD",
+                key="data_inicio_semanal",
+            )
+            dias = st.number_input(
+                "Para quantos dias? (1 a 7)",
+                min_value=1,
+                max_value=7,
+                value=7,
+                step=1,
+                key="dias_semanal",
+            )
+            gerar_semanal = st.form_submit_button(
+                "Gerar Plano + PDF",
+                type="primary",
+                use_container_width=True,
             )
 
-    with open(caminho_pdf, "rb") as f:
-        st.download_button(
-            label="Baixar PDF",
-            data=f.read(),
-            file_name=os.path.basename(caminho_pdf),
-            mime="application/pdf",
-            use_container_width=True,
-        )
+        if gerar_semanal:
+            contas_selecionadas = _resolver_contas(escolha_cliente, nome_para_id, contas_disponiveis)
+
+            if not api_key:
+                st.error("GROQ_API_KEY nao encontrada no .env.")
+                st.code("GROQ_API_KEY=gsk_...", language="bash")
+                return
+            if not contas_selecionadas:
+                st.error("Selecione pelo menos um cliente.")
+                return
+
+            generator = InstagramContentGenerator(api_key)
+            passos_totais = len(contas_selecionadas) * 4
+            progresso_estado = {"done": 0}
+            barra = st.progress(0.0, text="Iniciando...")
+            status_box = st.empty()
+
+            def status_cb(msg: str):
+                progresso_estado["done"] += 1
+                fracao = min(progresso_estado["done"] / max(passos_totais, 1), 1.0)
+                barra.progress(fracao, text=msg)
+                status_box.info(msg)
+
+            with st.spinner("Gerando conteudo semanal..."):
+                plano = gerar_plano_semanal(
+                    generator=generator,
+                    conta_ids=contas_selecionadas,
+                    data_inicio=data_inicio,
+                    dias=dias,
+                    status_cb=status_cb,
+                )
+                pasta_semana = salvar_plano_em_markdown(plano, CONFIGURACOES["pasta_output"])
+                caminho_pdf = os.path.join(pasta_semana, "plano_semanal.pdf")
+                try:
+                    exportar_plano_pdf(plano, caminho_pdf)
+                except ModuleNotFoundError as exc:
+                    st.error(str(exc))
+                    st.info("Instale dependencias com: pip install -r requirements.txt")
+                    return
+
+            barra.progress(1.0, text="Concluido")
+            status_box.success(f"Arquivos gerados em: {pasta_semana}")
+            st.success("Plano semanal gerado com sucesso.")
+
+            st.write("### Resumo")
+            for conta in plano["contas"]:
+                total_posts = sum(len(d["posts"]) for d in conta["dias"])
+                total_reels = sum(len(d["reels"]) for d in conta["dias"])
+                total_carrosseis = sum(len(d["carrosseis"]) for d in conta["dias"])
+                total_stories = sum(d["stories_quantidade"] for d in conta["dias"])
+                st.write(
+                    f"- {conta['nome']}: posts={total_posts}, reels={total_reels}, "
+                    f"carrosseis={total_carrosseis}, stories={total_stories}"
+                )
+
+            with open(caminho_pdf, "rb") as f:
+                st.download_button(
+                    label="Baixar PDF Semanal",
+                    data=f.read(),
+                    file_name=os.path.basename(caminho_pdf),
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="download_pdf_semanal",
+                )
+
+    with aba_especifico:
+        st.write("Geracao de uma publicacao focada em tema definido pela usuaria.")
+        tipos = {
+            "Post": "post",
+            "Reel": "reel",
+            "Carrossel": "carrossel",
+            "Stories": "stories",
+        }
+        with st.form("form_especifico", clear_on_submit=False):
+            escolha_cliente_esp = st.selectbox(
+                "Cliente",
+                options=opcoes_cliente,
+                index=0,
+                key="cliente_especifico",
+            )
+            tipo_label = st.selectbox(
+                "Tipo de conteudo",
+                options=list(tipos.keys()),
+                key="tipo_especifico",
+            )
+            prompt_usuario = st.text_area(
+                "Tema central da publicacao (prompt da usuaria)",
+                placeholder="Ex.: Ensaios de irmaos com recem-nascido sem perder protagonismo do primogenito.",
+                height=110,
+                key="prompt_especifico",
+            )
+            stories_quantidade = 6
+            if tipos[tipo_label] == "stories":
+                stories_quantidade = st.number_input(
+                    "Quantidade de stories",
+                    min_value=1,
+                    max_value=12,
+                    value=6,
+                    step=1,
+                    key="stories_qtd_especifico",
+                )
+            gerar_especifico = st.form_submit_button(
+                "Gerar Conteudo Especifico + PDF",
+                type="primary",
+                use_container_width=True,
+            )
+
+        if gerar_especifico:
+            contas_especifico = _resolver_contas(escolha_cliente_esp, nome_para_id, contas_disponiveis)
+            tipo = tipos[tipo_label]
+
+            if not api_key:
+                st.error("GROQ_API_KEY nao encontrada no .env.")
+                st.code("GROQ_API_KEY=gsk_...", language="bash")
+                return
+            if not prompt_usuario.strip():
+                st.error("Informe o tema central para orientar a geracao.")
+                return
+
+            generator = InstagramContentGenerator(api_key)
+            barra_esp = st.progress(0.0, text="Iniciando...")
+            itens = []
+            total = len(contas_especifico)
+
+            with st.spinner("Gerando conteudo especifico..."):
+                for i, conta_id in enumerate(contas_especifico, 1):
+                    barra_esp.progress(
+                        min((i - 1) / max(total, 1), 1.0),
+                        text=f"Gerando para {CONTAS[conta_id]['nome']}...",
+                    )
+                    item = generator.gerar_conteudo_especifico(
+                        conta_id=conta_id,
+                        tipo=tipo,
+                        prompt_usuario=prompt_usuario.strip(),
+                        stories_quantidade=int(stories_quantidade),
+                    )
+                    itens.append(item)
+
+                resultado = {
+                    "tipo": tipo,
+                    "prompt_usuario": prompt_usuario.strip(),
+                    "itens": itens,
+                }
+                pasta_especifico = _salvar_markdown_conteudo_especifico(
+                    resultado,
+                    CONFIGURACOES["pasta_output"],
+                )
+                caminho_pdf_especifico = os.path.join(pasta_especifico, "conteudo_especifico.pdf")
+                try:
+                    exportar_conteudo_especifico_pdf(resultado, caminho_pdf_especifico)
+                except ModuleNotFoundError as exc:
+                    st.error(str(exc))
+                    st.info("Instale dependencias com: pip install -r requirements.txt")
+                    return
+
+            barra_esp.progress(1.0, text="Concluido")
+            st.success(f"Conteudo especifico gerado em: {pasta_especifico}")
+
+            for item in itens:
+                with st.expander(f"{item['conta_nome']} - {tipo_label}", expanded=False):
+                    st.write(item["conteudo"])
+
+            with open(caminho_pdf_especifico, "rb") as f:
+                st.download_button(
+                    label="Baixar PDF do Conteudo Especifico",
+                    data=f.read(),
+                    file_name=os.path.basename(caminho_pdf_especifico),
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="download_pdf_especifico",
+                )
 
 
 if __name__ == "__main__":
