@@ -195,9 +195,12 @@ def exportar_conteudo_especifico_pdf(resultado: dict, caminho_pdf: str) -> str:
     for idx, item in enumerate(resultado["itens"]):
         story.append(Paragraph(f"Cliente: {escape(item['conta_nome'])}", h2))
         if item.get("stories_quantidade"):
+            dias = item.get("stories_dias", 1)
+            total = dias * item["stories_quantidade"]
             story.append(
                 Paragraph(
-                    f"Stories solicitados: {item['stories_quantidade']}",
+                    f"Stories solicitados: {item['stories_quantidade']} por dia, "
+                    f"durante {dias} dia(s) (total {total})",
                     normal,
                 )
             )

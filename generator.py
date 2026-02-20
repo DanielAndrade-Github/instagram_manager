@@ -3,6 +3,7 @@ Gerador de conteúdo para Instagram usando Groq API (gratuito)
 """
 
 import os
+import re
 from datetime import datetime
 from groq import Groq
 from config import CONTAS, CONFIGURACOES
@@ -65,6 +66,35 @@ Resuma em até 200 palavras as descobertas mais relevantes para criação de con
             print(f"Erro na geração de conteúdo: {e}")
             return None
 
+    def _extrair_termos_tema(self, prompt_usuario, limite=8):
+        stopwords = {
+            "para", "com", "sem", "sobre", "entre", "depois", "antes", "quando",
+            "como", "esse", "essa", "isso", "aquele", "aquela", "dessa", "desse",
+            "uma", "umas", "uns", "das", "dos", "que", "ser", "sao", "nos", "nas",
+            "por", "mais", "menos", "muito", "muita", "pelo", "pela", "delas",
+            "deles", "tema", "conteudo", "publicacao",
+        }
+        tokens = re.findall(r"[A-Za-zÀ-ÿ0-9]+", (prompt_usuario or "").lower())
+        termos = []
+        for token in tokens:
+            if len(token) < 4 or token in stopwords:
+                continue
+            if token not in termos:
+                termos.append(token)
+            if len(termos) >= limite:
+                break
+        return termos
+
+    def _conteudo_reflete_tema(self, conteudo, prompt_usuario):
+        if not conteudo:
+            return False
+        conteudo_lower = conteudo.lower()
+        termos = self._extrair_termos_tema(prompt_usuario)
+        if not termos:
+            return prompt_usuario.lower()[:20] in conteudo_lower
+        hits = sum(1 for termo in termos if termo in conteudo_lower)
+        return hits >= 1
+
     def _prompt_base_por_tipo(self, conta, tipo, tendencias, stories_quantidade=6):
         if tipo == "post":
             return get_post_prompt(conta, tendencias)
@@ -76,32 +106,97 @@ Resuma em até 200 palavras as descobertas mais relevantes para criação de con
             return get_stories_prompt(conta, quantidade=stories_quantidade)
         raise ValueError(f"Tipo de conteudo invalido: {tipo}")
 
-    def gerar_conteudo_especifico(self, conta_id, tipo, prompt_usuario, stories_quantidade=6):
+    def _prompt_especifico_por_tipo(
+        self,
+        conta,
+        tipo,
+        prompt_usuario,
+        stories_quantidade=6,
+        stories_dias=1,
+    ):
+        contexto_marca = f"""
+CONTEXTO DA MARCA (usar somente estes campos):
+- Nome: {conta['nome']}
+- Nicho: {conta['nicho']}
+- Publico: {conta['publico']}
+- Tom: {conta['tom']}
+"""
+        regras_gerais = f"""
+TEMA CENTRAL OBRIGATORIO:
+{prompt_usuario}
+
+REGRAS:
+- O conteudo deve girar integralmente em torno do tema central.
+- Nao usar personas, pilares, posicionamento detalhado, objecoes ou qualquer outro campo fora do contexto acima.
+- Nao inventar dados factuais especificos nao informados.
+- Manter linguagem coerente com o tom da marca.
+"""
+
+        if tipo == "post":
+            formato = """
+FORMATO DE SAIDA:
+TIPO: Post
+LEGENDA: [180-260 palavras]
+VISUAL: [1 linha]
+HASHTAGS: [10-15]
+CTA: [1-2 linhas]
+"""
+        elif tipo == "reel":
+            formato = """
+FORMATO DE SAIDA:
+TIPO: Reel
+DURACAO: [20-35s]
+ROTEIRO: [cenas com timing]
+LEGENDA: [60-120 palavras]
+HASHTAGS: [10-15]
+"""
+        elif tipo == "carrossel":
+            formato = """
+FORMATO DE SAIDA:
+TIPO: Carrossel
+TEMA: [titulo]
+SLIDES: [7-8, detalhar cada slide]
+LEGENDA: [100-160 palavras]
+HASHTAGS: [10-15]
+"""
+        elif tipo == "stories":
+            formato = f"""
+FORMATO DE SAIDA:
+TIPO: Stories
+DIAS: {stories_dias}
+STORIES_POR_DIA: {stories_quantidade}
+TOTAL_STORIES: {stories_dias * stories_quantidade}
+SEQUENCIA: [detalhar por dia e por story]
+CTA_FINAL: [1 linha]
+"""
+        else:
+            raise ValueError(f"Tipo de conteudo invalido: {tipo}")
+
+        return f"""Voce e uma estrategista de conteudo para Instagram.
+{contexto_marca}
+{regras_gerais}
+{formato}
+"""
+
+    def gerar_conteudo_especifico(
+        self,
+        conta_id,
+        tipo,
+        prompt_usuario,
+        stories_quantidade=6,
+        stories_dias=1,
+    ):
         """Gera um conteúdo pontual guiado por tema informado pela usuária."""
 
         conta = CONTAS[conta_id]
         tipo = tipo.strip().lower()
-
-        keywords = conta["keywords_pesquisa"]
-        if tipo == "reel":
-            keywords = keywords + ["reels tendencias"]
-        tendencias = self.pesquisar_tendencias(keywords)
-
-        prompt_base = self._prompt_base_por_tipo(
+        prompt_final = self._prompt_especifico_por_tipo(
             conta=conta,
             tipo=tipo,
-            tendencias=tendencias,
+            prompt_usuario=prompt_usuario,
             stories_quantidade=stories_quantidade,
+            stories_dias=stories_dias,
         )
-
-        prompt_final = f"""{prompt_base}
-
-AJUSTE ESTRATEGICO OBRIGATORIO:
-- Centro tematico da publicacao: {prompt_usuario}
-- Todo o conteudo deve manter o posicionamento da marca, mas girar em torno do tema acima.
-- Nao ignorar o tema central em nenhuma secao do output.
-- Mantenha o formato de resposta exatamente como solicitado no prompt base.
-"""
 
         max_tokens_por_tipo = {
             "post": 2200,
@@ -109,15 +204,47 @@ AJUSTE ESTRATEGICO OBRIGATORIO:
             "carrossel": 3200,
             "stories": 2800,
         }
-        conteudo = self.gerar_conteudo(prompt_final, max_tokens=max_tokens_por_tipo[tipo])
+        max_tokens = max_tokens_por_tipo[tipo]
+        conteudo = self.gerar_conteudo(prompt_final, max_tokens=max_tokens)
+        tema_detectado = self._conteudo_reflete_tema(conteudo, prompt_usuario)
+        tentativa = 1
+
+        if not tema_detectado:
+            tentativa = 2
+            prompt_reforco = f"""O texto gerado anteriormente nao incorporou o tema de forma suficiente.
+
+REESCREVA DO ZERO seguindo o mesmo formato exigido.
+
+TEMA CENTRAL OBRIGATORIO:
+{prompt_usuario}
+
+TEXTO ANTERIOR (para diagnostico, nao para copiar):
+{conteudo or 'vazio'}
+
+REGRAS:
+- Conecte explicitamente cada parte do conteudo ao tema central.
+- Use somente este contexto da marca:
+  Nome: {conta['nome']}
+  Nicho: {conta['nicho']}
+  Publico: {conta['publico']}
+  Tom: {conta['tom']}
+- Nao entregue resposta generica.
+"""
+            conteudo_retry = self.gerar_conteudo(prompt_reforco, max_tokens=max_tokens)
+            if conteudo_retry:
+                conteudo = conteudo_retry
+                tema_detectado = self._conteudo_reflete_tema(conteudo, prompt_usuario)
 
         return {
             "conta_id": conta_id,
             "conta_nome": conta["nome"],
             "tipo": tipo,
             "prompt_usuario": prompt_usuario,
-            "tendencias": tendencias,
+            "tendencias": None,
             "stories_quantidade": stories_quantidade if tipo == "stories" else None,
+            "stories_dias": stories_dias if tipo == "stories" else None,
+            "tema_detectado": tema_detectado,
+            "tentativa": tentativa,
             "conteudo": conteudo or "Falha ao gerar conteudo especifico.",
         }
     

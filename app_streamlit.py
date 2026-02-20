@@ -105,6 +105,55 @@ def _slugify(value: str) -> str:
     return value or "cliente"
 
 
+def _extrair_termos_tema(prompt_usuario: str, limite: int = 8) -> list[str]:
+    stopwords = {
+        "para", "com", "sem", "sobre", "entre", "depois", "antes", "quando",
+        "como", "esse", "essa", "isso", "aquele", "aquela", "dessa", "desse",
+        "uma", "umas", "uns", "das", "dos", "que", "ser", "sao", "nos", "nas",
+        "por", "mais", "menos", "muito", "muita", "pelo", "pela", "tema",
+        "conteudo", "publicacao", "pedido", "prompt",
+    }
+    tokens = re.findall(r"[A-Za-zÀ-ÿ0-9]+", (prompt_usuario or "").lower())
+    termos = []
+    for token in tokens:
+        if len(token) < 4 or token in stopwords:
+            continue
+        if token not in termos:
+            termos.append(token)
+        if len(termos) >= limite:
+            break
+    return termos
+
+
+def _validar_item_tema(conteudo: str, prompt_usuario: str) -> dict:
+    termos = _extrair_termos_tema(prompt_usuario)
+    conteudo_lower = (conteudo or "").lower()
+    hits = [termo for termo in termos if termo in conteudo_lower]
+    valido = len(hits) >= 1 if termos else prompt_usuario.lower()[:20] in conteudo_lower
+    return {
+        "valido": valido,
+        "termos_base": termos,
+        "termos_encontrados": hits,
+    }
+
+
+def _validar_resultado_especifico(resultado: dict) -> dict:
+    itens = []
+    aprovados = True
+    for item in resultado["itens"]:
+        check = _validar_item_tema(item.get("conteudo", ""), resultado.get("prompt_usuario", ""))
+        if not check["valido"]:
+            aprovados = False
+        itens.append(
+            {
+                "conta_nome": item["conta_nome"],
+                "valido": check["valido"],
+                "termos_encontrados": check["termos_encontrados"],
+            }
+        )
+    return {"aprovado": aprovados, "itens": itens}
+
+
 def _salvar_markdown_conteudo_especifico(resultado: dict, pasta_output: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     pasta_base = os.path.join(pasta_output, f"conteudo_especifico_{timestamp}")
@@ -119,7 +168,12 @@ def _salvar_markdown_conteudo_especifico(resultado: dict, pasta_output: str) -> 
             f.write(f"Tipo: {resultado['tipo']}\n")
             f.write(f"Tema central: {resultado['prompt_usuario']}\n")
             if item.get("stories_quantidade"):
-                f.write(f"Stories solicitados: {item['stories_quantidade']}\n")
+                dias = item.get("stories_dias", 1)
+                total = dias * item["stories_quantidade"]
+                f.write(
+                    f"Stories solicitados: {item['stories_quantidade']} por dia, "
+                    f"durante {dias} dia(s) (total {total})\n"
+                )
             f.write("\n---\n\n")
             f.write(item["conteudo"])
 
@@ -233,7 +287,7 @@ def main():
                 )
 
     with aba_especifico:
-        st.write("Geracao de uma publicacao focada em tema definido pela usuaria.")
+        st.write("Geracao de uma publicacao focada em tema definido por você Camila.")
         tipos = {
             "Post": "post",
             "Reel": "reel",
@@ -253,15 +307,24 @@ def main():
                 key="tipo_especifico",
             )
             prompt_usuario = st.text_area(
-                "Tema central da publicacao (prompt da usuaria)",
+                "Tema central da publicacao (faça seu prompt completo aqui Camila)",
                 placeholder="Ex.: Ensaios de irmaos com recem-nascido sem perder protagonismo do primogenito.",
                 height=110,
                 key="prompt_especifico",
             )
             stories_quantidade = 6
+            stories_dias = 1
             if tipos[tipo_label] == "stories":
+                stories_dias = st.number_input(
+                    "Para quantos dias de stories? (1 a 7)",
+                    min_value=1,
+                    max_value=7,
+                    value=1,
+                    step=1,
+                    key="stories_dias_especifico",
+                )
                 stories_quantidade = st.number_input(
-                    "Quantidade de stories",
+                    "Quantos stories por dia? (1 a 12)",
                     min_value=1,
                     max_value=12,
                     value=6,
@@ -273,6 +336,13 @@ def main():
                 type="primary",
                 use_container_width=True,
             )
+
+        if "resultado_especifico" not in st.session_state:
+            st.session_state["resultado_especifico"] = None
+            st.session_state["pasta_especifico"] = None
+            st.session_state["caminho_pdf_especifico"] = None
+            st.session_state["validacao_especifico"] = None
+            st.session_state["download_liberado_especifico"] = False
 
         if gerar_especifico:
             contas_especifico = _resolver_contas(escolha_cliente_esp, nome_para_id, contas_disponiveis)
@@ -302,6 +372,7 @@ def main():
                         tipo=tipo,
                         prompt_usuario=prompt_usuario.strip(),
                         stories_quantidade=int(stories_quantidade),
+                        stories_dias=int(stories_dias),
                     )
                     itens.append(item)
 
@@ -314,30 +385,80 @@ def main():
                     resultado,
                     CONFIGURACOES["pasta_output"],
                 )
-                caminho_pdf_especifico = os.path.join(pasta_especifico, "conteudo_especifico.pdf")
-                try:
-                    exportar_conteudo_especifico_pdf(resultado, caminho_pdf_especifico)
-                except ModuleNotFoundError as exc:
-                    st.error(str(exc))
-                    st.info("Instale dependencias com: pip install -r requirements.txt")
-                    return
 
             barra_esp.progress(1.0, text="Concluido")
             st.success(f"Conteudo especifico gerado em: {pasta_especifico}")
 
-            for item in itens:
-                with st.expander(f"{item['conta_nome']} - {tipo_label}", expanded=False):
+            st.session_state["resultado_especifico"] = resultado
+            st.session_state["pasta_especifico"] = pasta_especifico
+            st.session_state["caminho_pdf_especifico"] = os.path.join(
+                pasta_especifico,
+                "conteudo_especifico.pdf",
+            )
+            st.session_state["validacao_especifico"] = None
+            st.session_state["download_liberado_especifico"] = False
+
+        resultado_salvo = st.session_state.get("resultado_especifico")
+        if resultado_salvo:
+            st.write("### Etapa 1: Conteudo gerado")
+            for item in resultado_salvo["itens"]:
+                with st.expander(
+                    f"{item['conta_nome']} - {resultado_salvo['tipo'].title()}",
+                    expanded=False,
+                ):
+                    if not item.get("tema_detectado", True):
+                        st.warning(
+                            "Tema central com baixa aderencia detectada automaticamente. "
+                            "Considere regenerar com prompt mais especifico."
+                        )
+                    st.caption(
+                        f"Tentativas: {item.get('tentativa', 1)} | "
+                        f"Tema detectado: {'sim' if item.get('tema_detectado', False) else 'nao'}"
+                    )
                     st.write(item["conteudo"])
 
-            with open(caminho_pdf_especifico, "rb") as f:
-                st.download_button(
-                    label="Baixar PDF do Conteudo Especifico",
-                    data=f.read(),
-                    file_name=os.path.basename(caminho_pdf_especifico),
-                    mime="application/pdf",
-                    use_container_width=True,
-                    key="download_pdf_especifico",
-                )
+            st.write("### Etapa 2: Validacao do tema")
+            if st.button("Validar Conteudo Especifico", use_container_width=True):
+                validacao = _validar_resultado_especifico(resultado_salvo)
+                st.session_state["validacao_especifico"] = validacao
+
+                if validacao["aprovado"]:
+                    caminho_pdf_especifico = st.session_state["caminho_pdf_especifico"]
+                    try:
+                        exportar_conteudo_especifico_pdf(resultado_salvo, caminho_pdf_especifico)
+                    except ModuleNotFoundError as exc:
+                        st.error(str(exc))
+                        st.info("Instale dependencias com: pip install -r requirements.txt")
+                        return
+                    st.session_state["download_liberado_especifico"] = True
+                else:
+                    st.session_state["download_liberado_especifico"] = False
+
+            validacao_salva = st.session_state.get("validacao_especifico")
+            if validacao_salva:
+                if validacao_salva["aprovado"]:
+                    st.success("Validacao aprovada: tema encontrado em todos os conteudos.")
+                else:
+                    st.error(
+                        "Validacao reprovada: pelo menos um conteudo nao apresentou aderencia "
+                        "suficiente ao tema."
+                    )
+                for item_val in validacao_salva["itens"]:
+                    status = "OK" if item_val["valido"] else "FALHOU"
+                    termos = ", ".join(item_val["termos_encontrados"]) or "nenhum"
+                    st.write(f"- {item_val['conta_nome']}: {status} (termos encontrados: {termos})")
+
+            if st.session_state.get("download_liberado_especifico"):
+                caminho_pdf_especifico = st.session_state["caminho_pdf_especifico"]
+                with open(caminho_pdf_especifico, "rb") as f:
+                    st.download_button(
+                        label="Baixar PDF do Conteudo Especifico",
+                        data=f.read(),
+                        file_name=os.path.basename(caminho_pdf_especifico),
+                        mime="application/pdf",
+                        use_container_width=True,
+                        key="download_pdf_especifico",
+                    )
 
 
 if __name__ == "__main__":
