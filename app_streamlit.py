@@ -4,6 +4,7 @@ App Streamlit para gerar plano semanal e exportar PDF.
 
 from __future__ import annotations
 
+import hmac
 import os
 from datetime import date, datetime
 import re
@@ -26,6 +27,48 @@ def obter_api_key() -> str:
         return st.secrets.get("GROQ_API_KEY", "")
     except Exception:
         return ""
+
+
+def obter_credenciais_login() -> tuple[str, str]:
+    user = os.getenv("APP_LOGIN_USER", "")
+    password = os.getenv("APP_LOGIN_PASSWORD", "")
+
+    if not user or not password:
+        try:
+            user = user or st.secrets.get("APP_LOGIN_USER", "")
+            password = password or st.secrets.get("APP_LOGIN_PASSWORD", "")
+        except Exception:
+            pass
+
+    # Fallback solicitado para uso imediato.
+    user = user or "camila_andrade"
+    password = password or "danielmeuamor"
+    return user, password
+
+
+def exigir_login():
+    if st.session_state.get("auth_ok"):
+        return
+
+    usuario_correto, senha_correta = obter_credenciais_login()
+    st.title("Login")
+    st.caption("Acesso restrito")
+
+    with st.form("form_login", clear_on_submit=False):
+        usuario = st.text_input("Usuario")
+        senha = st.text_input("Senha", type="password")
+        entrar = st.form_submit_button("Entrar", use_container_width=True, type="primary")
+
+    if entrar:
+        ok_user = hmac.compare_digest(usuario, usuario_correto)
+        ok_senha = hmac.compare_digest(senha, senha_correta)
+        if ok_user and ok_senha:
+            st.session_state["auth_ok"] = True
+            st.rerun()
+        else:
+            st.error("Usuario ou senha invalidos.")
+
+    st.stop()
 
 
 def aplicar_tema_pastel():
@@ -184,8 +227,14 @@ def main():
     load_dotenv()
     st.set_page_config(page_title="Planejador Instagram", layout="centered")
     aplicar_tema_pastel()
+    exigir_login()
     st.title("Planejador e Gerador de Conteudo")
     st.caption("Gere plano semanal ou publicacao especifica com PDF dedicado.")
+
+    with st.sidebar:
+        if st.button("Sair", use_container_width=True):
+            st.session_state["auth_ok"] = False
+            st.rerun()
 
     api_key = obter_api_key()
     contas_disponiveis = list(CONTAS.keys())
