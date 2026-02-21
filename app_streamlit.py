@@ -92,6 +92,8 @@ def aplicar_tema_pastel():
             .block-container {
                 max-width: 920px;
                 padding-top: 1.5rem;
+                padding-left: 1rem;
+                padding-right: 1rem;
                 padding-bottom: 2rem;
             }
 
@@ -107,15 +109,18 @@ def aplicar_tema_pastel():
             }
 
             [data-testid="stDownloadButton"] button,
-            [data-testid="stFormSubmitButton"] button {
+            [data-testid="stFormSubmitButton"] button,
+            [data-testid="stButton"] button {
                 background-color: var(--accent) !important;
                 color: #fff !important;
                 border: 1px solid var(--accent) !important;
                 border-radius: 10px !important;
+                min-height: 2.8rem;
             }
 
             [data-testid="stDownloadButton"] button:hover,
-            [data-testid="stFormSubmitButton"] button:hover {
+            [data-testid="stFormSubmitButton"] button:hover,
+            [data-testid="stButton"] button:hover {
                 background-color: var(--accent-hover) !important;
                 border-color: var(--accent-hover) !important;
             }
@@ -129,6 +134,46 @@ def aplicar_tema_pastel():
             [data-testid="stAlert"] {
                 border-radius: 10px;
                 border: 1px solid var(--border);
+            }
+
+            .stMarkdown, .stMarkdown p {
+                word-break: break-word;
+            }
+
+            @media (max-width: 768px) {
+                .block-container {
+                    max-width: 100%;
+                    padding-top: 0.75rem;
+                    padding-left: 0.75rem;
+                    padding-right: 0.75rem;
+                    padding-bottom: 1.25rem;
+                }
+
+                h1 {
+                    font-size: 1.5rem !important;
+                    line-height: 1.2;
+                }
+
+                [data-testid="stForm"] {
+                    padding: 0.75rem 0.75rem 0.4rem 0.75rem;
+                    border-radius: 12px;
+                }
+
+                [data-testid="stTabs"] [role="tablist"] {
+                    overflow-x: auto;
+                    white-space: nowrap;
+                    gap: 0.25rem;
+                    scrollbar-width: thin;
+                }
+
+                [data-testid="stTabs"] button[role="tab"] {
+                    padding: 0.45rem 0.7rem;
+                    font-size: 0.9rem;
+                }
+
+                [data-testid="stExpander"] summary p {
+                    font-size: 0.95rem !important;
+                }
             }
         </style>
         """,
@@ -225,16 +270,18 @@ def _salvar_markdown_conteudo_especifico(resultado: dict, pasta_output: str) -> 
 
 def main():
     load_dotenv()
-    st.set_page_config(page_title="Planejador Instagram", layout="centered")
+    st.set_page_config(
+        page_title="Planejador Instagram",
+        layout="centered",
+        initial_sidebar_state="collapsed",
+    )
     aplicar_tema_pastel()
     exigir_login()
     st.title("Planejador e Gerador de Conteudo")
     st.caption("Gere plano semanal ou publicacao especifica com PDF dedicado.")
-
-    with st.sidebar:
-        if st.button("Sair", use_container_width=True):
-            st.session_state["auth_ok"] = False
-            st.rerun()
+    if st.button("Sair", use_container_width=True, key="logout_top"):
+        st.session_state["auth_ok"] = False
+        st.rerun()
 
     api_key = obter_api_key()
     contas_disponiveis = list(CONTAS.keys())
