@@ -89,9 +89,21 @@ def aplicar_tema_pastel():
                 color: var(--text);
             }
 
+            [data-testid="stHeader"],
+            [data-testid="stToolbar"],
+            [data-testid="stStatusWidget"],
+            [data-testid="stDecoration"] {
+                display: none !important;
+                height: 0 !important;
+            }
+
+            [data-testid="stAppViewContainer"] > .main {
+                padding-top: 0 !important;
+            }
+
             .block-container {
                 max-width: 920px;
-                padding-top: 1.5rem;
+                padding-top: 2.2rem;
                 padding-left: 1rem;
                 padding-right: 1rem;
                 padding-bottom: 2rem;
@@ -143,7 +155,7 @@ def aplicar_tema_pastel():
             @media (max-width: 768px) {
                 .block-container {
                     max-width: 100%;
-                    padding-top: 0.75rem;
+                    padding-top: 1.25rem;
                     padding-left: 0.75rem;
                     padding-right: 0.75rem;
                     padding-bottom: 1.25rem;
