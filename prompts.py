@@ -17,10 +17,10 @@ def get_carrossel_prompt(conta_info, tendencias):
         return _carrossel_click_newborn(conta_info, tendencias)
     return _carrossel_emocional(conta_info, tendencias)
 
-def get_stories_prompt(conta_info, quantidade=6):
+def get_stories_prompt(conta_info, quantidade=6, dia_numero=1):
     if conta_info['nome'] == "Click Newborn":
         return _stories_click_newborn(conta_info, quantidade)
-    return _stories_emocional(conta_info, quantidade)
+    return _stories_emocional(conta_info, quantidade, dia_numero)
 
 # ===========================================
 # CLICK NEWBORN - PREMIUM E-COMMERCE
@@ -549,10 +549,71 @@ HASHTAGS:
 [12-15 tags]
 ---"""
 
-def _stories_emocional(conta_info, quantidade):
+def _stories_emocional(conta_info, quantidade, dia_numero=1):
+    _temas_validacao = [
+        "Aceitação do corpo que mudou — você é mais do que sua aparência agora.",
+        "Ambivalência emocional — amar profundamente e ao mesmo tempo se sentir perdida é completamente real.",
+        "Identidade além da maternidade — quem você era antes ainda existe dentro de você.",
+        "Presença no caos — estar aqui, mesmo imperfeita, já é o suficiente.",
+        "Força invisível — o quanto você suporta sem pedir reconhecimento de ninguém.",
+        "Memória que escorrega — tudo que parece longo é, na verdade, uma fase passageira.",
+        "Celebração silenciosa — olhar para trás e ver o quanto você cresceu sem perceber.",
+    ]
+    _interativos = [
+        ("Enquete", "Qual fase mais te surpreendeu? (Gravidez / Newborn / Primeira infância)"),
+        ("Caixinha de perguntas", "O que ninguém te contou sobre ser mãe?"),
+        ("Slider de reação", "O quanto você consegue estar presente hoje? (de 😴 a 🌟)"),
+        ("Quiz", "Qual tipo de mãe você é? (A que planeja tudo / A que improvisa / As duas)"),
+        ("Enquete", "O que você mais sente falta de antes de ser mãe?"),
+        ("Caixinha de perguntas", "Se você pudesse voltar, qual momento da maternidade guardaria primeiro?"),
+        ("Votação", "Próxima sessão — Gestante ou Newborn? Você decide!"),
+    ]
+    _ctas_chamada = [
+        "Tenho 2 datas em abril abertas. Se você sente que esse momento merece ser guardado, vamos conversar? 💌",
+        "Ainda tenho espaço na agenda de março. Sem compromisso — só uma conversa sobre o que você quer preservar. 🤍",
+        "Tenho 1 data especial disponível este mês. É para você que está esperando o momento certo chegar. Vamos falar? ✨",
+        "Abri algumas datas para maio. Se a maternidade está passando rápido demais, talvez seja a hora. Conversa? 💌",
+        "Sabe aquela sessão que você fica adiando? Tenho data em abril. Vamos planejar juntas? 🤍",
+        "Tenho 2 sessões disponíveis em março e abril. Para quem quer guardar mais do que uma foto — uma memória. 💌",
+        "Última semana com datas livres neste mês. Para a mãe que merece ser lembrada exatamente como é hoje. 🌿",
+    ]
+    _bastidores = [
+        "Flores frescas sendo arranjadas com luz natural entrando pelo estúdio — detalhe de bastidor real",
+        "Xícara de café ou chá sendo preparada num cantinho aconchegante antes da cliente chegar",
+        "Mesa de boas-vindas sendo organizada com capricho — pequenos detalhes que fazem a diferença",
+        "Equipamentos fotográficos dispostos com cuidado em ambiente silencioso e calmo",
+        "Cantinho especial com almofadas e manta sendo preparado para o conforto da cliente",
+        "Playlist e aromatizador sendo configurados — clima pensado antes mesmo de a porta abrir",
+        "Último ajuste no espaço antes da sessão — detalhe que mostra o quanto cada cliente importa",
+    ]
+    _depoimentos = [
+        "gestante — foco em como ela se sentiu vista e bonita pela primeira vez na gravidez",
+        "puérpera — foco no acolhimento e no quanto a sessão a fez sentir que estava fazendo o suficiente",
+        "mãe de bebê 6 meses a 1 ano — foco na memória preservada antes do tempo escapar",
+        "família completa — foco na conexão e no momento de pausa que a sessão proporcionou",
+        "mãe que adiou e quase perdeu a fase — foco no alívio de ter feito mesmo com medo",
+        "mãe que recebeu a sessão de presente — foco na surpresa e na emoção de ser presenteada",
+        "mãe de segundo filho — foco em registrar cada filho com o mesmo amor e presença",
+    ]
+
+    idx = (dia_numero - 1) % 7
+    tema_validacao = _temas_validacao[idx]
+    tipo_interativo, pergunta_interativo = _interativos[idx]
+    cta_chamada = _ctas_chamada[idx]
+    bastidor_cenario = _bastidores[idx]
+    depoimento_foco = _depoimentos[idx]
+
+    personas = list(conta_info["personas"].values())
+    persona = personas[idx % len(personas)]
+    persona_resumo = f"{persona['perfil']} | Dor: {persona['dor_oculta']}"
+
     return f"""Você é estrategista de stories para serviços emocionais.
 
 OBJETIVO: Humanizar marca + criar conexão + agenda suave.
+
+PERSONA DO DIA (DIA {dia_numero}):
+{persona_resumo}
+Oriente o tom e os textos de validação e bastidor para ressoar com essa persona.
 
 {quantidade} STORIES - MIX EMOCIONAL:
 
@@ -560,8 +621,15 @@ TIPOS:
 - 2 Stories: Bastidor acolhedor (preparação ambiente, cuidado com cliente)
 - 1 Story: Depoimento real (texto cliente + foto resultado)
 - 1 Story: Validação emocional (frase reflexiva sobre maternidade)
-- 1 Story: Interativo (enquete: "Qual fase você quer preservar?")
+- 1 Story: Interativo (enquete ou pergunta)
 - 1 Story: Chamada suave agenda (disponibilidade próximos meses)
+
+ATENÇÃO — DIRETRIZES EXCLUSIVAS DESTE DIA:
+- Cenário dos Bastidores: {bastidor_cenario}
+- Foco do Depoimento: {depoimento_foco}
+- Tema da Validação: {tema_validacao}
+- Formato do Interativo: {tipo_interativo} — "{pergunta_interativo}"
+- CTA da Chamada (adapte o texto, não copie literalmente): {cta_chamada}
 
 REGRAS:
 ✓ Autenticidade > perfeição estética
@@ -569,6 +637,8 @@ REGRAS:
 ✓ Textos: acolhedores, nunca vendedores
 ✓ CTA: "Vamos conversar?" não "Agende já"
 ✓ Fotos: naturais, não posadas
+✓ PROIBIDO copiar as diretrizes acima — use-as como inspiração de tema e tom
+✓ Crie frases 100% originais; nunca transcreva os textos de referência
 
 FORMATO:
 
@@ -587,13 +657,6 @@ ELEMENTO:
 
 TOM:
 [Como se estivesse conversando com amiga]
-
-EXEMPLOS DE TEXTO:
-- Bastidor: "Chegou 1h antes só pra garantir que esteja tudo acolhedor pra ela 🤍"
-- Depoimento: "As palavras dela ❤️ [texto cliente]"
-- Validação: "Você não precisa estar radiante pra merecer ser fotografada. Você merece porque está VIVA nesse momento."
-- Interativo: "Qual fase você sente que está passando rápido demais? 🥺"
-- Chamada: "Tenho 3 datas em março. Se você sente que esse momento merece, vamos conversar? 💌"
 
 OUTPUT:
 ---

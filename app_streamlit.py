@@ -470,6 +470,7 @@ def main():
             total = len(contas_especifico)
 
             with st.spinner("Gerando conteudo especifico..."):
+                historico_variacao = []
                 for i, conta_id in enumerate(contas_especifico, 1):
                     barra_esp.progress(
                         min((i - 1) / max(total, 1), 1.0),
@@ -481,8 +482,11 @@ def main():
                         prompt_usuario=prompt_usuario.strip(),
                         stories_quantidade=int(stories_quantidade),
                         stories_dias=int(stories_dias),
+                        contexto_variacao=historico_variacao,
                     )
                     itens.append(item)
+                    if item.get("conteudo"):
+                        historico_variacao.append(item["conteudo"])
 
                 resultado = {
                     "tipo": tipo,

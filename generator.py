@@ -4,6 +4,7 @@ Gerador de conteúdo para Instagram usando Groq API (gratuito)
 
 import os
 import re
+from difflib import SequenceMatcher
 from datetime import datetime
 from groq import Groq
 from config import CONTAS, CONFIGURACOES
@@ -95,6 +96,147 @@ Resuma em até 200 palavras as descobertas mais relevantes para criação de con
         hits = sum(1 for termo in termos if termo in conteudo_lower)
         return hits >= 1
 
+    def _normalizar_texto(self, texto):
+        return re.sub(r"\s+", " ", (texto or "").strip().lower())
+
+    def _conteudos_muito_parecidos(self, conteudo_a, conteudo_b, limite=0.9):
+        texto_a = self._normalizar_texto(conteudo_a)
+        texto_b = self._normalizar_texto(conteudo_b)
+        if not texto_a or not texto_b:
+            return False
+        similaridade = SequenceMatcher(None, texto_a, texto_b).ratio()
+        return similaridade >= limite
+
+    def _foco_stories_por_dia(self, dia):
+        focos = [
+            "abertura de relacionamento e contexto da marca",
+            "bastidores de processo e autoridade pratica",
+            "educacao objetiva com dica acionavel",
+            "prova social e confianca",
+            "interacao ativa com enquete/pergunta",
+            "quebra de objecao e reposicionamento de valor",
+            "convite final para conversa/acao suave",
+        ]
+        return focos[(dia - 1) % len(focos)]
+
+    def _foco_por_tipo_e_item(self, tipo, indice):
+        focos_por_tipo = {
+            "post": [
+                "dor principal da persona",
+                "educacao pratica com mini passo a passo",
+                "quebra de objecao com reposicionamento de valor",
+                "prova social e autoridade de marca",
+                "erro comum e como evitar",
+                "bastidor com aprendizado",
+                "convite final com CTA suave",
+            ],
+            "reel": [
+                "hook provocativo e contraste visual",
+                "tutorial rapido em etapas",
+                "narrativa antes e depois",
+                "bastidor com prova de processo",
+                "objeção e resposta curta",
+                "storytelling emocional",
+                "chamada para interacao",
+            ],
+            "carrossel": [
+                "lista de erros e correcoes",
+                "guia pratico passo a passo",
+                "mitos e verdades",
+                "checklist acionavel",
+                "estudo de caso simplificado",
+                "comparacao de abordagens",
+                "plano de acao resumido",
+            ],
+            "stories": [
+                "abertura e contexto do dia",
+                "bastidor com proximidade",
+                "educacao objetiva",
+                "prova social",
+                "interacao ativa",
+                "quebra de objecao",
+                "CTA final",
+            ],
+        }
+        focos = focos_por_tipo.get(tipo, ["abordagem complementar"])
+        return focos[(indice - 1) % len(focos)]
+
+    def _limite_similaridade_por_tipo(self, tipo):
+        limites = {
+            "post": 0.88,
+            "reel": 0.9,
+            "carrossel": 0.87,
+            "stories": 0.75,
+        }
+        return limites.get(tipo, 0.9)
+
+    def _resumo_historico(self, historico, max_itens=2, limite_chars=220):
+        if not historico:
+            return ""
+        itens = []
+        for i, texto in enumerate(historico[-max_itens:], 1):
+            resumo = self._normalizar_texto(texto)[:limite_chars] or "sem resumo"
+            itens.append(f"- Item anterior {i}: {resumo}")
+        return "\n".join(itens)
+
+    def _encontrar_semelhante(self, conteudo, historico, tipo):
+        limite = self._limite_similaridade_por_tipo(tipo)
+        for texto in historico:
+            if self._conteudos_muito_parecidos(conteudo, texto, limite=limite):
+                return texto
+        return None
+
+    def _gerar_item_com_variacao(
+        self,
+        tipo,
+        prompt_base,
+        indice,
+        total,
+        historico,
+        max_tokens,
+    ):
+        foco_item = self._foco_por_tipo_e_item(tipo, indice)
+        historico_texto = self._resumo_historico(historico)
+        prompt_variacao = f"""{prompt_base}
+
+CONTEXTO DE VARIACAO OBRIGATORIO:
+- Tipo: {tipo}
+- Item atual: {indice} de {total}
+- Foco deste item: {foco_item}
+
+REGRAS ANTI-REPETICAO:
+- Entregue um angulo diferente dos itens anteriores.
+- Nao repetir frases de abertura, bullets, CTA e exemplos.
+- Evite somente trocar sinonimos mantendo mesma estrutura.
+"""
+        if historico_texto:
+            prompt_variacao += f"\nITENS ANTERIORES (referencia para nao repetir):\n{historico_texto}\n"
+
+        conteudo = self.gerar_conteudo(prompt_variacao, max_tokens=max_tokens)
+        if not conteudo:
+            return None
+
+        semelhante = self._encontrar_semelhante(conteudo, historico, tipo)
+        if not semelhante:
+            return conteudo
+
+        prompt_retry = f"""O item {indice} ficou muito parecido com outro item do mesmo tipo.
+
+REESCREVA DO ZERO com variacao real.
+
+CONTEUDO ANTERIOR (nao copiar):
+{semelhante[:1200]}
+
+REQUISITOS:
+- Tipo: {tipo}
+- Item: {indice} de {total}
+- Foco obrigatorio: {foco_item}
+- Nova abertura, novos exemplos, novo CTA e nova estrutura
+- Nenhum reaproveitamento literal
+"""
+        retry = self.gerar_conteudo(prompt_retry, max_tokens=max_tokens)
+        return retry or conteudo
+
     def _prompt_base_por_tipo(self, conta, tipo, tendencias, stories_quantidade=6):
         if tipo == "post":
             return get_post_prompt(conta, tendencias)
@@ -166,8 +308,14 @@ TIPO: Stories
 DIAS: {stories_dias}
 STORIES_POR_DIA: {stories_quantidade}
 TOTAL_STORIES: {stories_dias * stories_quantidade}
-SEQUENCIA: [detalhar por dia e por story]
+SEQUENCIA: [detalhar por dia e por story, com bloco separado para cada dia]
 CTA_FINAL: [1 linha]
+
+REGRAS DE VARIACAO OBRIGATORIAS:
+- Estruturar explicitamente em blocos: DIA 1, DIA 2, ..., DIA {stories_dias}.
+- Cada dia deve ter objetivo, angulo e CTA proprios.
+- Proibido repetir as mesmas frases/CTAs de um dia para outro.
+- Nao reescrever o DIA 1 mudando poucas palavras.
 """
         else:
             raise ValueError(f"Tipo de conteudo invalido: {tipo}")
@@ -185,6 +333,7 @@ CTA_FINAL: [1 linha]
         prompt_usuario,
         stories_quantidade=6,
         stories_dias=1,
+        contexto_variacao=None,
     ):
         """Gera um conteúdo pontual guiado por tema informado pela usuária."""
 
@@ -204,13 +353,29 @@ CTA_FINAL: [1 linha]
             "carrossel": 3200,
             "stories": 2800,
         }
-        max_tokens = max_tokens_por_tipo[tipo]
-        conteudo = self.gerar_conteudo(prompt_final, max_tokens=max_tokens)
+        if tipo == "stories":
+            total_stories = max(1, stories_dias * stories_quantidade)
+            max_tokens = min(4500, max(2800, total_stories * 85))
+        else:
+            max_tokens = max_tokens_por_tipo[tipo]
+        historico = list(contexto_variacao or [])
+        indice_variacao = len(historico) + 1
+        total_variacao = max(indice_variacao, 2) if historico else 1
+        conteudo = self._gerar_item_com_variacao(
+            tipo=tipo,
+            prompt_base=prompt_final,
+            indice=indice_variacao,
+            total=total_variacao,
+            historico=historico,
+            max_tokens=max_tokens,
+        )
+        if not conteudo:
+            conteudo = "Falha ao gerar conteudo especifico."
         tema_detectado = self._conteudo_reflete_tema(conteudo, prompt_usuario)
         tentativa = 1
 
         if not tema_detectado:
-            tentativa = 2
+            tentativa += 1
             prompt_reforco = f"""O texto gerado anteriormente nao incorporou o tema de forma suficiente.
 
 REESCREVA DO ZERO seguindo o mesmo formato exigido.
@@ -259,7 +424,14 @@ REGRAS:
             print(f"Gerando post {i+1}/{quantidade}...")
             
             prompt = get_post_prompt(conta, tendencias)
-            conteudo = self.gerar_conteudo(prompt)
+            conteudo = self._gerar_item_com_variacao(
+                tipo="post",
+                prompt_base=prompt,
+                indice=i + 1,
+                total=quantidade,
+                historico=posts,
+                max_tokens=2200,
+            )
             
             if conteudo:
                 posts.append(conteudo)
@@ -277,7 +449,14 @@ REGRAS:
             print(f"Gerando reel {i+1}/{quantidade}...")
             
             prompt = get_reel_prompt(conta, tendencias)
-            conteudo = self.gerar_conteudo(prompt)
+            conteudo = self._gerar_item_com_variacao(
+                tipo="reel",
+                prompt_base=prompt,
+                indice=i + 1,
+                total=quantidade,
+                historico=reels,
+                max_tokens=2200,
+            )
             
             if conteudo:
                 reels.append(conteudo)
@@ -295,19 +474,27 @@ REGRAS:
             print(f"Gerando carrossel {i+1}/{quantidade}...")
             
             prompt = get_carrossel_prompt(conta, tendencias)
-            conteudo = self.gerar_conteudo(prompt, max_tokens=3000)
+            conteudo = self._gerar_item_com_variacao(
+                tipo="carrossel",
+                prompt_base=prompt,
+                indice=i + 1,
+                total=quantidade,
+                historico=carrosseis,
+                max_tokens=3200,
+            )
             
             if conteudo:
                 carrosseis.append(conteudo)
         
         return carrosseis
     
-    def gerar_stories_por_dia(self, conta_id, stories_por_dia):
+    def gerar_stories_por_dia(self, conta_id, stories_por_dia, datas=None):
         """Gera stories por dia com quantidade variável."""
 
         conta = CONTAS[conta_id]
         all_stories = []
         total_dias = len(stories_por_dia)
+        historico = []
 
         for dia, quantidade_dia in enumerate(stories_por_dia, 1):
             if quantidade_dia <= 0:
@@ -320,14 +507,69 @@ REGRAS:
 
             print(f"Gerando stories do dia {dia}/{total_dias} ({quantidade_dia} stories)...")
 
-            prompt = get_stories_prompt(conta, quantidade=quantidade_dia)
+            data_dia = None
+            if datas and dia - 1 < len(datas):
+                data_ref = datas[dia - 1]
+                data_dia = data_ref.isoformat() if hasattr(data_ref, "isoformat") else str(data_ref)
+
+            foco_dia = self._foco_stories_por_dia(dia)
+            historico_texto = ""
+            if historico:
+                ultimos = "\n".join(
+                    f"- Dia {item['dia']}: {item['resumo']}"
+                    for item in historico[-3:]
+                )
+                historico_texto = f"""
+DIAS ANTERIORES JA GERADOS (nao repetir nenhum desses temas, frases ou CTAs):
+{ultimos}
+"""
+
+            contexto_data = f"- Data: {data_dia}\n" if data_dia else ""
+            prompt = f"""{get_stories_prompt(conta, quantidade=quantidade_dia, dia_numero=dia)}
+
+CONTEXTO OBRIGATORIO DESTE DIA:
+- Dia no plano: {dia} de {total_dias}
+{contexto_data}- Foco narrativo do dia: {foco_dia}
+
+REGRAS ADICIONAIS:
+- Gere apenas stories deste dia.
+- Nao copie abertura, desenvolvimento, CTA e ordem narrativa de dias anteriores.
+- Traga variacao real de assunto, exemplos e chamadas.
+{historico_texto}
+"""
             conteudo = self.gerar_conteudo(prompt, max_tokens=2500)
+            conteudo_final = conteudo or "Falha ao gerar stories para este dia."
+
+            for story_anterior in all_stories:
+                if story_anterior["quantidade"] <= 0:
+                    continue
+                if self._conteudos_muito_parecidos(conteudo_final, story_anterior["conteudo"]):
+                    trecho_anterior = (story_anterior["conteudo"] or "")[:1200]
+                    prompt_reforco = f"""O texto do dia {dia} ficou muito parecido com o dia {story_anterior['dia']}.
+
+REESCREVA DO ZERO os stories do dia {dia} com variacao real.
+
+CONTEUDO DO DIA ANTERIOR (nao copiar):
+{trecho_anterior}
+
+REQUISITOS:
+- Manter o foco narrativo: {foco_dia}
+- Manter quantidade: {quantidade_dia} stories
+- Criar nova abertura, novas frases e novo CTA
+- Evitar qualquer reaproveitamento literal
+"""
+                    retry = self.gerar_conteudo(prompt_reforco, max_tokens=2500)
+                    if retry:
+                        conteudo_final = retry
+                    break
 
             all_stories.append({
                 "dia": dia,
                 "quantidade": quantidade_dia,
-                "conteudo": conteudo or "Falha ao gerar stories para este dia."
+                "conteudo": conteudo_final
             })
+            resumo = self._normalizar_texto(conteudo_final)[:380]
+            historico.append({"dia": dia, "resumo": resumo or "sem resumo"})
 
         return all_stories
 

@@ -74,7 +74,11 @@ def gerar_plano_semanal(
         stories_por_dia = distribuir_total(volume["stories"], dias)
         if status_cb:
             status_cb(f"{conta['nome']}: gerando stories por dia...")
-        stories_dia = generator.gerar_stories_por_dia(conta_id, stories_por_dia)
+        stories_dia = generator.gerar_stories_por_dia(
+            conta_id,
+            stories_por_dia,
+            datas=datas,
+        )
 
         posts_dia = distribuir_itens(posts, dias)
         reels_dia = distribuir_itens(reels, dias)
